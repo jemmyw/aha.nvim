@@ -12,7 +12,7 @@ use { 'jemmyw/aha.nvim', rocks = { 'lunajson' } }
 
 # Auth
 
-You have have downloaded the aha client from https://github.com/aha-app/aha-cli and authed:
+You need to have downloaded the aha client from https://github.com/aha-app/aha-cli and authed:
 
 ```sh
 $ npm install -g aha-cli
