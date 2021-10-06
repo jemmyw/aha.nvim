@@ -33,7 +33,8 @@ function AhaBuffer:render_record()
   self:clear()
 
   writers.write_name(self.bufnr, self.record, 1)
-  writers.write_desc(self.bufnr, self.record, 3)
+  local detail_lines = writers.write_details(self.bufnr, self.record, 3)
+  writers.write_desc(self.bufnr, self.record, 4 + detail_lines)
 end
 
 function AhaBuffer:configure()

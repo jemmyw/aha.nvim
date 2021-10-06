@@ -68,6 +68,20 @@ local function get_url()
   return netrc_entry and netrc_entry.url
 end
 
+local function html2md(html)
+  local markdown = ""
+  local job = Job:new {
+    command = "html2md",
+    writer = html,
+    on_stdout = function(_, md, _)
+      markdown = markdown .. "\n" .. md
+    end,
+  }
+
+  job:sync(1000)
+  return vim.trim(markdown)
+end
+
 function M.get_teams()
   local query = [[
     query {
@@ -85,23 +99,31 @@ function M.get_teams()
   return teams
 end
 
-function M.get_features()
-  local query = [[
-    query GetFeatures(
-  ]]
+local FEATURE_RE = "%w+-%d+"
+local REQUIREMENT_RE = "%w+-%d+-%d+"
+local EPIC_RE = "%w+-E-%d+"
+
+function M.get_ref(str)
+  local res = { EPIC_RE, REQUIREMENT_RE, FEATURE_RE }
+  for _, re in ipairs(res) do
+    local ref = string.match(str, re)
+    if ref then
+      return ref
+    end
+  end
 end
 
 function M.ref_type(ref)
-  if string.match(ref, "^(%w+)-(%d+)$") then
+  if string.match(ref, "^" .. FEATURE_RE .. "$") then
     return "feature"
-  elseif string.match(ref, "^(%w+)-(%d+)-(%d+)$") then
+  elseif string.match(ref, "^" .. REQUIREMENT_RE .. "$") then
     return "requirement"
-  elseif string.match(ref, "^(%w+)-E-") then
+  elseif string.match(ref, "^" .. EPIC_RE) then
     return "epic"
   end
 end
 
-function M.get_record(ref)
+function M.get_record(ref, opts)
   local type = M.ref_type(ref)
   if not type then
     errmsg = string.format("Invalid type %s", ref)
@@ -112,44 +134,67 @@ function M.get_record(ref)
     query GetRecord($id: ID!) {
       $$type(id: $id) {
         id
+        path
         referenceNum
         name
         description { htmlBody }
+        assignedToUser { name }
+        teamWorkflowStatus {
+          color
+          name
+        }
       }
     }
   ]]
   query = query:gsub("$$type", type)
 
-  local record = M.query(query, {
-    variables = {
-      id = ref,
-    },
-  })
-  return record[type]
+  local transform = function(data)
+    local record = data[type]
+    record["subdomain"] = get_subdomain()
+    local markdown = html2md(record.description.htmlBody)
+    record.description["markdownBody"] = markdown
+    return record
+  end
+
+  local data = M.query(
+    query,
+    vim.tbl_extend("force", {
+      variables = {
+        id = ref,
+      },
+      transform = transform,
+    }, opts or {})
+  )
+
+  return data
+end
+
+function M.transform_response(response_body, transform)
+  local status, t = pcall(lunajson.decode, response_body)
+
+  if status and t and t.data then
+    return transform(t.data)
+  else
+    return nil
+  end
 end
 
 function M.query(query, opts)
   opts = opts or {}
   local variables = opts.variables or nil
+  local transform = opts.transform or function(data)
+    return data
+  end
 
   local json = {
     query = query,
     variables = variables,
   }
 
-  local parse_response = function(response)
-    local status, t = pcall(lunajson.decode, response.body)
-
-    if status then
-      return t.data
-    else
-      return nil
-    end
-  end
-
-  local callback = function(response)
-    opts.callback(parse_response(response))
-  end
+  local callback = vim.schedule_wrap(function(response)
+    local transformed_response = M.transform_response(response.body, transform)
+    opts.callback(transformed_response)
+  end)
 
   local response = curl.post(get_url() .. "/api/v2/graphql", {
     raw_body = vim.fn.json_encode(json),
@@ -163,7 +208,7 @@ function M.query(query, opts)
   if opts.callback then
     return response
   else
-    return parse_response(response)
+    return M.transform_response(response.body, transform)
   end
 end
 
@@ -172,7 +217,7 @@ function M.search(query, opts)
   local params = opts.params or {}
   params.q = query
 
-  local callback = function(response)
+  local callback = vim.schedule_wrap(function(response)
     if response.body == nil or response.body == "" then
       print "no body"
       return
@@ -185,7 +230,7 @@ function M.search(query, opts)
     else
       opts.callback(t.results)
     end
-  end
+  end)
 
   local response = curl.get(get_url() .. "/api/v1/search", {
     query = params,

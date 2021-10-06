@@ -1,9 +1,15 @@
 local pickers = require "telescope.pickers"
 local sorters = require "telescope.sorters"
 local finders = require "telescope.finders"
-local popup = require "plenary.popup"
+local debounce = require "telescope.debounce"
+local actions = require "telescope.actions"
+local action_state = require "telescope.actions.state"
+local action_set = require "telescope.actions.set"
 local conf = require("telescope.config").values
+local previewers = require "aha.previewers"
+local popup = require "plenary.popup"
 local api = require "aha.api"
+local aha = require "aha"
 
 local M = {}
 
@@ -40,6 +46,39 @@ local function msgLoadingPopup(msg, exec_fn, complete_fn)
   )
 end
 
+local function open_in_browser(prompt_bufnr)
+  local entry = action_state.get_selected_entry(prompt_buffnr)
+  if not entry.record then
+    return
+  end
+
+  local url = entry.record.url
+  actions.close(prompt_bufnr)
+  pcall(vim.cmd, "silent !xdg-open " .. url)
+end
+
+local function copy_url(prompt_bufnr)
+  local entry = action_state.get_selected_entry(prompt_bufnr)
+  if not entry.record then
+    return
+  end
+
+  local url = entry.record.url
+  vim.fn.setreg("+", url, "c")
+  vim.notify("[Aha!] Copied '" .. url .. "' to the system clipboard (+ register)", 1)
+end
+
+local function open(prompt_bufnr, command)
+  local entry = action_state.get_selected_entry(prompt_bufnr)
+  if not entry.record then
+    return
+  end
+
+  local ref = entry.record.reference_num
+  actions.close(prompt_bufnr)
+  aha.create_buffer(ref)
+end
+
 M.pick_team = function(telescope_opts, opts)
   telescope_opts = telescope_opts or {}
 
@@ -64,48 +103,13 @@ M.pick_team = function(telescope_opts, opts)
             value = entry.referencePrefix .. entry.name,
             display = ref .. " " .. entry.name,
             ordinal = entry.referencePrefix,
+            record = entry,
           }
         end,
       },
       sorter = conf.generic_sorter(telescope_opts),
     }):find()
   end)
-end
-
---- Debounces a function on the trailing edge. Automatically
---- `schedule_wrap()`s.
----
---@param fn (function) Function to debounce
---@param timeout (number) Timeout in ms
---@param first (boolean, optional) Whether to use the arguments of the first
----call to `fn` within the timeframe. Default: Use arguments of the last call.
---@returns (function, timer) Debounced function and timer. Remember to call
----`timer:close()` at the end or you will leak memory!
-function M.debounce_trailing(fn, ms, first)
-  local timer = vim.loop.new_timer()
-  local wrapped_fn
-
-  if not first then
-    function wrapped_fn(...)
-      local argv = { ... }
-      local argc = select("#", ...)
-
-      timer:start(ms, 0, function()
-        pcall(vim.schedule_wrap(fn), unpack(argv, 1, argc))
-      end)
-    end
-  else
-    local argv, argc
-    function wrapped_fn(...)
-      argv = argv or { ... }
-      argc = argc or select("#", ...)
-
-      timer:start(ms, 0, function()
-        pcall(vim.schedule_wrap(fn), unpack(argv, 1, argc))
-      end)
-    end
-  end
-  return wrapped_fn, timer
 end
 
 M.live_search = function(telescope_opts, opts)
@@ -116,11 +120,12 @@ M.live_search = function(telescope_opts, opts)
       value = entry,
       display = entry.record.reference_num .. " " .. entry.record.name,
       ordinal = entry.record.reference_num,
+      record = entry.record,
     }
   end
 
   local live_search_job
-  local callable = M.debounce_trailing(function(_, prompt, process_result, process_complete)
+  local callable = debounce.debounce_trailing(function(_, prompt, process_result, process_complete)
     if live_search_job then
       pcall(function()
         live_search_job:shutdown()
@@ -128,6 +133,7 @@ M.live_search = function(telescope_opts, opts)
     end
 
     if prompt == nil or prompt == "" or string.len(prompt) < 3 then
+      process_result { value = prompt, display = "Type 3+ characters to search", ordinal = "" }
       process_complete()
       return
     end
@@ -168,6 +174,15 @@ M.live_search = function(telescope_opts, opts)
     prompt_title = "Aha! Search",
     finder = requester(),
     sorter = sorters.highlighter_only(),
+    previewer = previewers.record.new(telescope_opts),
+    attach_mappings = function(_, map)
+      action_set.select:replace(function(prompt_bufnr, type)
+        open(prompt_bufnr, type)
+      end)
+      map("i", "<c-b>", open_in_browser)
+      map("i", "<c-y>", copy_url)
+      return true
+    end,
   }):find()
 end
 

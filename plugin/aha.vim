@@ -6,6 +6,8 @@ set cpo&vim " reset to defaults
 hi def link AhaHeader      Number
 hi def link AhaSubHeader   Identifier
 
+lua require'aha'
+
 " Command to run
 command! -nargs=* Aha lua require'aha'.aha(<f-args>)
 command! ATeams lua require'ahatelescope'.pick_team()

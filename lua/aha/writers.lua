@@ -74,8 +74,35 @@ function M.write_name(bufnr, record, line)
   end
 end
 
+function M.write_details(bufnr, record, line)
+  local table = {
+    { label = "Status", value = record.teamWorkflowStatus.name },
+    { label = "Assigned to", value = record.assignedToUser.name },
+    { label = "URL", value = string.format("https://%s.aha.io%s", record.subdomain, record.path) },
+  }
+
+  local max_label = 0
+  for _, p in ipairs(table) do
+    if string.len(p.label) > max_label then
+      max_label = string.len(p.label)
+    end
+  end
+
+  local details = ""
+  for _, p in ipairs(table) do
+    details = details .. p.label .. ": "
+    details = details .. string.rep(" ", max_label - string.len(p.label))
+    details = details .. p.value
+    details = details .. "\n"
+  end
+
+  M.write_block(bufnr, details, line, false)
+
+  return #table
+end
+
 function M.write_desc(bufnr, record, line)
-  local desc = vim.fn.trim(record.description.htmlBody)
+  local desc = vim.fn.trim(record.description.markdownBody)
   local lines = vim.split(desc:gsub("\r\n", "\n"), "\n", true)
   vim.list_extend(lines, { "" })
   local desc_mark = M.write_block(bufnr, lines, line, true)
